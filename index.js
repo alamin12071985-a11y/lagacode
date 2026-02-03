@@ -17,7 +17,7 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // 🧠 অ্যাডমিন স্টেট (প্রোডাক্ট অ্যাড ও ব্রডকাস্টের জন্য)
-const adminState = {}; 
+const adminState = {};
 
 // ============================================================
 // 🛠 হেল্পার ফাংশন (Database Helpers)
@@ -81,8 +81,9 @@ bot.use(async (ctx, next) => {
         }
     }
     
-    // অ্যাডমিন উইজার্ড হ্যান্ডলার
-    if (ctx.from && ctx.from.id === ADMIN_ID && adminState[ADMIN_ID]) {
+    // অ্যাডমিন উইজার্ড হ্যান্ডলার (CRASH FIX: Check if ctx.message exists)
+    // এখানে ctx.message চেক করা হয়েছে যাতে বাটনে চাপ দিলে ক্র্যাশ না হয়
+    if (ctx.from && ctx.from.id === ADMIN_ID && adminState[ADMIN_ID] && ctx.message) {
         return handleAdminWizard(ctx);
     }
 
@@ -318,7 +319,8 @@ bot.action('admin_add_start', (ctx) => {
 // উইজার্ড হ্যান্ডলার ফাংশন
 async function handleAdminWizard(ctx) {
     const state = adminState[ADMIN_ID];
-    const text = ctx.message.text;
+    // নিরাপদ টেক্সট রিডিং (ক্র্যাশ ফিক্স)
+    const text = ctx.message.text || ''; 
 
     // 📢 ব্রডকাস্ট লজিক
     if (state.type === 'BROADCAST') {
