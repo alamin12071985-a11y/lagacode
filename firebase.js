@@ -1,32 +1,20 @@
-const admin = require('firebase-admin');
-require('dotenv').config();
+const { initializeApp } = require('firebase/app');
+const { getDatabase, ref } = require('firebase/database');
 
-let serviceAccount;
+// আপনার Firebase Console থেকে Config কপি করে নিচে বসান
+const firebaseConfig = {
+  apiKey: "AIzaSyD1PPDhogcw7fBu27PkO1iuMfGFLUwMN70",
+  authDomain: "fir-55206.firebaseapp.com",
+  databaseURL: "https://fir-55206-default-rtdb.firebaseio.com",
+  projectId: "fir-55206",v
+  storageBucket: "fir-55206.firebasestorage.app",
+  messagingSenderId: "24586463698",
+  appId: "1:24586463698:web:8b2f21073295ef4382400b",
+  measurementId: "G-K676BWHYR4"
+};
 
-try {
-    // ১. প্রথমে চেক করবে রেন্ডার বা সার্ভারের ENV তে 'FIREBASE_SERVICE_ACCOUNT' আছে কিনা
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    } 
-    // ২. না থাকলে লোকাল ফোল্ডারের ফাইল খুঁজবে
-    else {
-        serviceAccount = require('./serviceAccountKey.json');
-    }
-} catch (error) {
-    console.error('❌ Firebase Error: serviceAccountKey.json missing or invalid ENV variable.');
-    process.exit(1);
-}
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
 
-// ফায়ারবেস ইনিশিয়াল করা হচ্ছে
-if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        databaseURL: process.env.FIREBASE_DB_URL
-    });
-}
-
-const db = admin.database();
-
-console.log("🔥 Firebase Connected Successfully!");
-
-module.exports = db;
+module.exports = { db, ref };
