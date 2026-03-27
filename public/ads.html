@@ -3,22 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Earn Rewards</title>
+    <title>Earn Rewards Premium</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
-    <!-- Ad Script -->
+    <!-- Primary Ad Network (GigaPub) -->
+    <script src="https://ad.gigapub.tech/script?id=5930"></script>
+    <!-- Fallback Ad Network (LibTL) -->
     <script src='//libtl.com/sdk.js' data-zone='10525553' data-sdk='show_10525553'></script>
 
     <style>
         :root {
-            --bg-gradient: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
-            --card-bg: rgba(255, 255, 255, 0.05);
-            --card-border: rgba(255, 255, 255, 0.1);
+            --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            --glass-bg: rgba(255, 255, 255, 0.03);
+            --glass-border: rgba(255, 255, 255, 0.08);
             --primary: #00d2ff;
             --secondary: #3a7bd5;
             --accent: #FFD700;
             --text-main: #ffffff;
-            --text-muted: #a0a0a0;
+            --text-muted: #8b8b9e;
             --success: #00e676;
         }
 
@@ -41,6 +43,29 @@
             position: relative;
         }
 
+        /* --- Animated Background Particles --- */
+        .particles {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            overflow: hidden;
+            z-index: 0;
+            pointer-events: none;
+        }
+        .particle {
+            position: absolute;
+            width: 4px; height: 4px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            animation: floatUp 10s infinite linear;
+            box-shadow: 0 0 10px rgba(255,255,255,0.5);
+        }
+
+        @keyframes floatUp {
+            0% { transform: translateY(100vh) scale(0); opacity: 0; }
+            50% { opacity: 1; }
+            100% { transform: translateY(-10vh) scale(1.5); opacity: 0; }
+        }
+
         /* --- Loading Screen --- */
         #loading-screen {
             position: fixed;
@@ -51,205 +76,216 @@
             justify-content: center;
             align-items: center;
             z-index: 9999;
-            transition: opacity 0.5s ease, visibility 0.5s ease;
+            transition: opacity 0.8s ease, visibility 0.8s ease;
         }
 
         .spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid rgba(255,255,255,0.1);
-            border-top-color: var(--primary);
+            width: 60px; height: 60px;
+            border: 5px solid rgba(255,255,255,0.1);
+            border-top-color: var(--accent);
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            animation: spin 1s cubic-bezier(0.5, 0, 0.5, 1) infinite;
         }
 
         .loading-text {
-            margin-top: 15px;
+            margin-top: 20px;
             font-size: 14px;
             color: var(--text-muted);
-            letter-spacing: 1px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
         }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        .loaded #loading-screen {
-            opacity: 0;
-            visibility: hidden;
-        }
+        .loaded #loading-screen { opacity: 0; visibility: hidden; }
 
         /* --- Main Container --- */
         .container {
             width: 100%;
-            max-width: 400px;
+            max-width: 420px;
             padding: 20px;
-            display: none; /* JS দিয়ে শো করাবে */
+            display: none;
             flex-direction: column;
-            gap: 20px;
-            animation: slideUp 0.6s ease forwards;
-        }
-
-        @keyframes slideUp {
-            from { opacity: 0; transform: translateY(30px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* --- Balance Card (Glassmorphism) --- */
-        .balance-card {
-            background: linear-gradient(45deg, rgba(0, 210, 255, 0.2), rgba(58, 123, 213, 0.2));
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border: 1px solid var(--card-border);
-            border-radius: 20px;
-            padding: 25px;
-            text-align: center;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            gap: 25px;
             position: relative;
+            z-index: 10;
+            animation: popIn 0.8s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards;
+        }
+
+        @keyframes popIn {
+            0% { opacity: 0; transform: scale(0.8) translateY(50px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+
+        /* --- Glassmorphism Balance Card --- */
+        .balance-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 30px 20px;
+            text-align: center;
+            position: relative;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
             overflow: hidden;
         }
-        
+
+        /* Shimmer Effect */
         .balance-card::before {
             content: '';
             position: absolute;
-            top: -50%; left: -50%;
-            width: 200%; height: 200%;
-            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
-            animation: shine 6s infinite linear;
+            top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            animation: shimmer 3s infinite;
         }
-
-        @keyframes shine {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
+        @keyframes shimmer {
+            to { left: 100%; }
         }
 
         .balance-icon {
-            font-size: 24px;
-            margin-bottom: 10px;
-            display: block;
+            font-size: 32px;
+            margin-bottom: 5px;
+            display: inline-block;
+            animation: bounce 2s infinite;
+        }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
         }
 
         .balance-label {
             font-size: 14px;
             color: var(--text-muted);
-            text-transform: uppercase;
             letter-spacing: 1px;
+            text-transform: uppercase;
         }
 
         .balance-amount {
-            font-size: 42px;
-            font-weight: 700;
+            font-size: 48px;
+            font-weight: 800;
             margin-top: 5px;
-            background: linear-gradient(to right, #fff, #b3e5fc);
+            background: linear-gradient(to bottom, #ffffff, #c4c4c4);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-        }
-
-        .balance-amount small {
-            font-size: 16px;
-            font-weight: 400;
-            opacity: 0.8;
-        }
-
-        /* --- Task Card --- */
-        .task-card {
-            background: var(--card-bg);
-            border: 1px solid var(--card-border);
-            border-radius: 16px;
-            padding: 20px;
-            text-align: left;
+            text-shadow: 0 2px 10px rgba(0, 210, 255, 0.3);
             transition: transform 0.2s;
+        }
+        
+        /* Task Card */
+        .task-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 24px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
 
         .task-header {
             display: flex;
             align-items: center;
-            gap: 15px;
-            margin-bottom: 15px;
+            margin-bottom: 20px;
         }
 
         .task-icon-box {
-            width: 50px;
-            height: 50px;
-            background: rgba(255, 215, 0, 0.15);
-            border-radius: 12px;
+            width: 60px; height: 60px;
+            background: linear-gradient(135deg, rgba(255, 215, 0, 0.1), rgba(255, 215, 0, 0.05));
+            border-radius: 16px;
             display: flex;
             justify-content: center;
             align-items: center;
-            font-size: 24px;
+            font-size: 28px;
             color: var(--accent);
+            margin-right: 16px;
+            border: 1px solid rgba(255, 215, 0, 0.2);
         }
 
         .task-title {
-            font-size: 18px;
-            font-weight: 600;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
         }
-
-        .task-desc {
-            font-size: 14px;
+        .task-subtitle {
+            font-size: 13px;
             color: var(--text-muted);
-            margin-bottom: 15px;
-            line-height: 1.5;
+            margin-top: 4px;
         }
 
         /* --- Buttons --- */
         .btn {
             width: 100%;
-            padding: 14px;
-            border-radius: 12px;
+            padding: 16px;
+            border-radius: 16px;
             border: none;
-            font-size: 16px;
+            font-size: 17px;
             font-weight: 600;
             cursor: pointer;
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 8px;
-            transition: all 0.2s ease;
+            gap: 10px;
+            transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .btn-primary {
-            background: linear-gradient(90deg, var(--secondary), var(--primary));
+            background: linear-gradient(90deg, #00c6ff, #0072ff);
             color: white;
-            box-shadow: 0 4px 15px rgba(0, 210, 255, 0.3);
+            box-shadow: 0 8px 20px rgba(0, 114, 255, 0.4);
         }
 
         .btn-primary:active {
-            transform: scale(0.97);
-            box-shadow: 0 2px 5px rgba(0, 210, 255, 0.3);
+            transform: scale(0.96);
+            box-shadow: 0 4px 10px rgba(0, 114, 255, 0.4);
+        }
+
+        /* Ripple Effect */
+        .btn::after {
+            content: '';
+            position: absolute;
+            width: 100%; height: 100%;
+            top: 0; left: 0;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 10%, transparent 10%);
+            transform: scale(10);
+            opacity: 0;
+            transition: transform 0.5s, opacity 0.5s;
+        }
+        .btn:active::after {
+            transform: scale(0);
+            opacity: 1;
+            transition: 0s;
         }
 
         .btn-close {
             background: rgba(255, 255, 255, 0.05);
             color: var(--text-muted);
             border: 1px solid rgba(255, 255, 255, 0.1);
-            margin-top: 10px;
-        }
-        
-        .btn-close:active {
-            background: rgba(255, 255, 255, 0.1);
         }
 
         /* --- Toast Notification --- */
         #toast {
             position: fixed;
-            bottom: 50px;
+            bottom: 60px;
             left: 50%;
             transform: translateX(-50%) translateY(100px);
-            background: var(--success);
-            color: #000;
-            padding: 12px 24px;
+            background: #1f1f2f;
+            border: 1px solid var(--success);
+            color: var(--success);
+            padding: 14px 30px;
             border-radius: 50px;
-            font-weight: bold;
-            box-shadow: 0 5px 20px rgba(0, 230, 118, 0.4);
+            font-weight: 600;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
             opacity: 0;
-            transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-            z-index: 1000;
+            transition: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            z-index: 2000;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
         }
 
         #toast.show {
@@ -257,143 +293,205 @@
             transform: translateX(-50%) translateY(0);
         }
 
-        /* Pulse Animation for Icon */
-        .pulse {
-            animation: pulse 2s infinite;
+        /* Error Animation */
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-10px); }
+            40%, 80% { transform: translateX(10px); }
         }
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-            100% { transform: scale(1); }
+        .shake {
+            animation: shake 0.6s cubic-bezier(.36,.07,.19,.97) both;
         }
-
     </style>
 </head>
 <body>
 
+    <!-- Background Particles Generator -->
+    <div class="particles" id="particles"></div>
+
     <!-- Loading Screen -->
     <div id="loading-screen">
         <div class="spinner"></div>
-        <div class="loading-text">Initializing...</div>
+        <div class="loading-text">Loading Assets...</div>
     </div>
 
     <!-- Main App Container -->
     <div class="container" id="app">
         
-        <div class="header" style="text-align: center; margin-bottom: 10px;">
-            <h2 style="font-weight: 300; letter-spacing: 1px;">🔥 TASK CENTER</h2>
+        <div class="header" style="text-align: center;">
+            <h2 style="font-weight: 600; font-size: 24px; background: linear-gradient(to right, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">REWARD HUB</h2>
         </div>
 
         <!-- Balance Section -->
         <div class="balance-card">
-            <span class="balance-icon">💎</span>
-            <div class="balance-label">Available Balance</div>
-            <div class="balance-amount" id="balanceDisplay">0 <small>Coins</small></div>
+            <div class="balance-icon">💎</div>
+            <div class="balance-label">Your Balance</div>
+            <div class="balance-amount" id="balanceDisplay">0</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 5px;">COINS AVAILABLE</div>
         </div>
 
         <!-- Task Section -->
         <div class="task-card">
             <div class="task-header">
-                <div class="task-icon-box">📺</div>
+                <div class="task-icon-box">⚡</div>
                 <div>
-                    <div class="task-title">Watch & Earn</div>
+                    <div class="task-title">Premium Task</div>
+                    <div class="task-subtitle">Watch a short video to earn</div>
                 </div>
             </div>
-            <p class="task-desc">প্রিমিয়াম ভিডিও বিজ্ঞাপনটি সম্পূর্ণ দেখুন এবং তাৎক্ষণিক <strong>১০ কয়েন</strong> জিতে নিন।</p>
             
-            <button class="btn btn-primary" id="watchBtn" onclick="watchAd()">
-                <span>▶</span> Watch Ad (+10)
+            <button class="btn btn-primary" id="watchBtn" onclick="initAdProcess()">
+                <span id="btnIcon">▶</span>
+                <span id="btnText">Watch Ad (+10)</span>
             </button>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 15px; text-align: center; opacity: 0.7;">
+                * High quality ads selected for you
+            </div>
         </div>
 
         <button class="btn btn-close" onclick="window.Telegram.WebApp.close()">✖ Close Window</button>
     </div>
 
     <!-- Toast -->
-    <div id="toast">✅ Reward Claimed!</div>
+    <div id="toast">
+        <span style="font-size:18px">✅</span> Reward Added!
+    </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.expand();
 
+        // Generate Particles
+        const particlesContainer = document.getElementById('particles');
+        for (let i = 0; i < 20; i++) {
+            const p = document.createElement('div');
+            p.className = 'particle';
+            p.style.left = Math.random() * 100 + '%';
+            p.style.animationDelay = Math.random() * 10 + 's';
+            p.style.opacity = Math.random() * 0.5 + 0.2;
+            particlesContainer.appendChild(p);
+        }
+
         const urlParams = new URLSearchParams(window.location.search);
         const uid = urlParams.get('uid');
-        let balanceInterval;
-
-        // Fake Loading Simulation for UI
+        
+        // UI Initialization
         setTimeout(() => {
             document.body.classList.add('loaded');
             document.getElementById('app').style.display = 'flex';
-            
-            // Initial Balance Fetch
-            if(uid) {
-                updateBalance(); // Fetch immediately
-                balanceInterval = setInterval(updateBalance, 5000); // Poll every 5s
-            } else {
-                document.getElementById('balanceDisplay').innerHTML = 'Error <small>No UID</small>';
-            }
-        }, 1500); // 1.5 second loading delay
+            if(uid) updateBalance();
+        }, 2000);
 
-        // Function to Fetch Balance
+        // Balance Fetch
         function updateBalance() {
             if(!uid) return;
-            
-            // Simulating API call (Replace with your actual fetch logic)
             fetch(`/api/balance?uid=${uid}`)
             .then(res => res.json())
             .then(data => {
                 if(data.balance !== undefined) {
-                    document.getElementById('balanceDisplay').innerHTML = `${data.balance} <small>Coins</small>`;
+                    animateValue('balanceDisplay', parseInt(document.getElementById('balanceDisplay').innerText) || 0, data.balance, 1000);
                 }
             }).catch(e => console.log("Balance fetch error", e));
         }
 
-        // Watch Ad Function
-        function watchAd() {
-            if(!uid) {
-                alert("Error: Please open from the bot.");
-                return;
-            }
-
-            const btn = document.getElementById('watchBtn');
-            btn.innerHTML = '<span class="pulse">⏳</span> Loading Ad...';
-            btn.disabled = true;
-            btn.style.opacity = "0.7";
-
-            // Ad Integration Logic
-            try {
-                if (typeof show_10525553 === 'function') {
-                    show_10525553().then(() => {
-                        giveReward();
-                        resetBtn(btn);
-                    }).catch(e => {
-                        console.log("Ad SDK Error:", e);
-                        giveReward(); // Fallback for testing
-                        resetBtn(btn);
-                    });
-                } else {
-                    // Simulate Ad Wait if SDK missing
-                    setTimeout(() => {
-                        giveReward();
-                        resetBtn(btn);
-                    }, 2500);
+        // Number Animation
+        function animateValue(id, start, end, duration) {
+            const obj = document.getElementById(id);
+            let startTimestamp = null;
+            const step = (timestamp) => {
+                if (!startTimestamp) startTimestamp = timestamp;
+                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                obj.innerHTML = Math.floor(progress * (end - start) + start);
+                if (progress < 1) {
+                    window.requestAnimationFrame(step);
                 }
-            } catch (e) {
-                console.error(e);
-                setTimeout(() => {
-                    giveReward();
-                    resetBtn(btn);
-                }, 2000);
+            };
+            window.requestAnimationFrame(step);
+        }
+
+        // --- AD LOGIC START ---
+        function initAdProcess() {
+            const btn = document.getElementById('watchBtn');
+            const btnText = document.getElementById('btnText');
+            const btnIcon = document.getElementById('btnIcon');
+
+            btn.disabled = true;
+            btn.classList.remove('shake'); // Remove previous shake class
+            btnText.innerText = "Loading Ad...";
+            btnIcon.innerText = "⏳";
+            btn.style.opacity = "0.8";
+
+            // Step 1: Try GigaPub (Primary)
+            if (typeof window.showGiga === 'function') {
+                console.log("Attempting GigaPub Ad...");
+                window.showGiga("main")
+                    .then(() => {
+                        console.log("GigaPub Ad Completed");
+                        giveReward("GigaPub");
+                        resetBtn();
+                    })
+                    .catch(e => {
+                        console.warn("GigaPub Failed:", e);
+                        // Step 2: Fallback to LibTL
+                        attemptFallbackAd();
+                    });
+            } else {
+                // Step 2: Fallback immediately if GigaPub not found
+                console.log("GigaPub not defined, trying Fallback");
+                attemptFallbackAd();
             }
         }
 
-        function resetBtn(btn) {
-            btn.innerHTML = '<span>▶</span> Watch Ad (+10)';
-            btn.disabled = false;
-            btn.style.opacity = "1";
+        function attemptFallbackAd() {
+            const btnText = document.getElementById('btnText');
+            btnText.innerText = "Loading Backup Ad...";
+
+            if (typeof show_10525553 === 'function') {
+                console.log("Attempting LibTL Ad...");
+                show_10525553()
+                    .then(() => {
+                        console.log("LibTL Ad Completed");
+                        giveReward("LibTL");
+                        resetBtn();
+                    })
+                    .catch(e => {
+                        console.error("LibTL Failed:", e);
+                        handleAdFail();
+                    });
+            } else {
+                console.error("No Ad Networks Available");
+                handleAdFail();
+            }
         }
 
-        function giveReward() {
+        function handleAdFail() {
+            const btn = document.getElementById('watchBtn');
+            const btnText = document.getElementById('btnText');
+            const btnIcon = document.getElementById('btnIcon');
+            
+            btnText.innerText = "Ad Failed (Try Again)";
+            btnIcon.innerText = "⚠️";
+            btn.style.opacity = "1";
+            btn.classList.add('shake'); // Add shake animation
+            
+            setTimeout(() => {
+                resetBtn();
+            }, 2000);
+        }
+
+        function resetBtn() {
+            const btn = document.getElementById('watchBtn');
+            const btnText = document.getElementById('btnText');
+            const btnIcon = document.getElementById('btnIcon');
+            
+            btn.disabled = false;
+            btnText.innerText = "Watch Ad (+10)";
+            btnIcon.innerText = "▶";
+            btn.style.opacity = "1";
+            btn.classList.remove('shake');
+        }
+
+        function giveReward(source) {
             fetch('/api/reward', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -402,11 +500,12 @@
             .then(res => res.json())
             .then(data => {
                 if(data.success) {
-                    // Update UI with new balance from response
-                    document.getElementById('balanceDisplay').innerHTML = `${data.newBalance} <small>Coins</small>`;
+                    // Animate Balance
+                    animateValue('balanceDisplay', parseInt(document.getElementById('balanceDisplay').innerText), data.newBalance, 1500);
                     
                     // Show Toast
                     const toast = document.getElementById("toast");
+                    toast.innerHTML = `<span style="font-size:18px">✅</span> +10 Coins Added!`;
                     toast.className = "show";
                     setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 3000);
                 }
