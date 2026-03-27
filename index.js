@@ -1,87 +1,76 @@
 require('dotenv').config();
 const express = require('express');
 const { Telegraf, Markup } = require('telegraf');
-const db = require('./firebase');
+const db = require('./firebase'); // আপনার firebase config file
 
-// ⚙️ কনফিগারেশন
+// ⚙️ Configuration
 const PORT = process.env.PORT || 3000;
 const ADMIN_ID = parseInt(process.env.ADMIN_ID);
 const DOMAIN = process.env.RENDER_EXTERNAL_URL;
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const REFERRAL_BONUS = 50; // রেফার বোনাস
+const REFERRAL_BONUS = 50;
 
 const app = express();
 const bot = new Telegraf(BOT_TOKEN);
 
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static('public')); // public folder for ads.html
 
-// 🧠 অ্যাডমিন স্টেট (উইজার্ড এবং ম্যানেজমেন্টের জন্য)
+// 🧠 Admin State
 const adminState = {};
 
 // ============================================================
-// 🛠 হেল্পার ফাংশন (Database Helpers)
+// 🛠 Helper Functions
 // ============================================================
+
+// Fancy Text Generator (Basic)
+const f = (text) => {
+    const map = {
+        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ', 'g': 'ɢ', 'h': 'ʜ',
+        'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ',
+        'q': 'ǫ', 'r': 'ʀ', 's': 'ꜱ', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x',
+        'y': 'ʏ', 'z': 'ᴢ'
+    };
+    return text.toLowerCase().split('').map(c => map[c] || c).join('');
+};
 
 async function getUser(uid) {
     try {
         const snap = await db.ref(`users/${uid}`).once('value');
         return snap.val();
-    } catch (e) {
-        console.error("DB Error (getUser):", e);
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
 async function updateUserBalance(uid, amount) {
     try {
-        const userRef = db.ref(`users/${uid}/balance`);
-        await userRef.transaction((current) => (current || 0) + amount);
-    } catch (e) {
-        console.error("DB Error (updateBalance):", e);
-    }
-}
-
-// প্রোডাক্ট লিস্ট (নতুন প্রোডাক্ট সবার আগে)
-async function getActiveProducts() {
-    try {
-        const snap = await db.ref('products').orderByChild('active').equalTo(true).once('value');
-        const data = snap.val();
-        if (!data) return [];
-        return Object.keys(data).map(key => ({
-            id: key,
-            ...data[key]
-        })).reverse();
-    } catch (e) {
-        console.error("DB Error (getProducts):", e);
-        return [];
-    }
+        await db.ref(`users/${uid}/balance`).transaction((current) => (current || 0) + amount);
+    } catch (e) { console.error("Balance Update Error:", e); }
 }
 
 // ============================================================
-// 🤖 মিডলওয়্যার এবং ইউজার চেকিং (রেফারেল সহ)
+// 🤖 Middleware & User Registration
 // ============================================================
 
 bot.use(async (ctx, next) => {
     if (ctx.from) {
         const uid = ctx.from.id;
-        const ref = db.ref(`users/${uid}`);
-        const snap = await ref.once('value');
+        const snap = await db.ref(`users/${uid}`).once('value');
 
         if (!snap.exists()) {
             let referrerId = null;
-            
-            // রেফারেল লজিক
             if (ctx.startPayload && ctx.startPayload != uid && !isNaN(ctx.startPayload)) {
                 referrerId = parseInt(ctx.startPayload);
                 await updateUserBalance(referrerId, REFERRAL_BONUS);
                 await db.ref(`users/${referrerId}/referrals`).transaction(c => (c || 0) + 1);
                 try {
-                    await bot.telegram.sendMessage(referrerId, `🎉 <b>New Referral!</b>\nএকজন আপনার লিংকে জয়েন করেছে। আপনি <b>${REFERRAL_BONUS} Coins</b> পেয়েছেন।`, {parse_mode: 'HTML'});
+                    // Premium Referral Notification
+                    await bot.telegram.sendMessage(referrerId, 
+                        `🎉 <b>Nᴇᴡ Rᴇꜰᴇʀʀᴀʟ Jᴏɪɴᴇᴅ!</b>\n💰 Yᴏᴜ Iɴꜱᴛᴀɴᴛʟʏ Rᴇᴄᴇɪᴠᴇᴅ <b>+${REFERRAL_BONUS} Cᴏɪɴꜱ</b>!`, 
+                        {parse_mode: 'HTML'}
+                    );
                 } catch(e){}
             }
-
-            await ref.set({
+            await db.ref(`users/${uid}`).set({
                 firstName: ctx.from.first_name,
                 username: ctx.from.username || 'none',
                 balance: 0,
@@ -91,444 +80,357 @@ bot.use(async (ctx, next) => {
         }
     }
     
-    // অ্যাডমিন উইজার্ড হ্যান্ডলার (Crash Fix)
     if (ctx.from && ctx.from.id === ADMIN_ID && adminState[ADMIN_ID] && ctx.message) {
         return handleAdminWizard(ctx);
     }
-
     return next();
 });
 
 // ============================================================
-// 🎨 মেনু ডিজাইন (Always Visible Buttons)
+// 🎨 Menus
 // ============================================================
 
 const getMainMenu = (isAdmin) => {
     let buttons = [
-        [Markup.button.callback('🛍 Source Codes', 'menu_source')],
-        [Markup.button.callback('🤝 Refer & Earn', 'menu_refer'), Markup.button.callback('💰 Wallet', 'menu_wallet')],
-        [Markup.button.callback('📂 My Library', 'menu_library'), Markup.button.callback('💬 Support', 'menu_support')]
+        [Markup.button.callback('🛒 Sᴏᴜʀᴄᴇ Cᴏᴅᴇꜱ', 'menu_shop')],
+        [Markup.button.callback('🤝 Rᴇꜰᴇʀ & Eᴀʀɴ', 'menu_refer'), Markup.button.callback('💰 Wᴀʟʟᴇᴛ', 'menu_wallet')],
+        [Markup.button.callback('📂 Mʏ Lɪʙʀᴀʀʏ', 'menu_library'), Markup.button.callback('💬 Sᴜᴘᴘᴏʀᴛ', 'menu_support')]
     ];
-    
-    // শুধুমাত্র অ্যাডমিনের জন্য
-    if (isAdmin) buttons.push([Markup.button.callback('👑 Admin Panel', 'admin_panel')]);
-    
+    if (isAdmin) buttons.push([Markup.button.callback('👑 Aᴅᴍɪɴ Pᴀɴᴇʟ', 'admin_panel')]);
     return Markup.inlineKeyboard(buttons);
 };
 
-// কমান্ড হ্যান্ডলার
 bot.command('start', async (ctx) => await sendHome(ctx));
-bot.command('source_codes', (ctx) => ctx.triggerAction('menu_source'));
-bot.command('refer', (ctx) => ctx.triggerAction('menu_refer'));
-bot.command('wallet', (ctx) => ctx.triggerAction('menu_wallet'));
-bot.command('support', (ctx) => ctx.triggerAction('menu_support'));
 
-// হোম পেজ ফাংশন
 async function sendHome(ctx) {
-    try { 
-        if(ctx.callbackQuery) await ctx.deleteMessage(); 
-    } catch(e){} 
-    
+    try { if(ctx.callbackQuery) await ctx.deleteMessage(); } catch(e){}
     const user = await getUser(ctx.from.id);
-    const balance = user ? user.balance : 0;
+    const bal = user ? user.balance : 0;
     
-    const msg = `🔰 <b>Laga Code - Premium Store</b>\n\n` +
-                `👋 হ্যালো <b>${ctx.from.first_name}</b>,\n` +
-                `আপনার ব্যালেন্স: <b>${balance} Coins</b>\n\n` +
-                `নিচের বাটন থেকে আপনার পছন্দের সোর্স কোড সংগ্রহ করুন 👇`;
+    const msg = `👋 Hᴇʟʟᴏ <b>${ctx.from.first_name}</b>!\n\n` +
+                `💎 Bᴀʟᴀɴᴄᴇ: <b>${bal} Cᴏɪɴꜱ</b>\n` +
+                `🛒 Wᴇʟᴄᴏᴍᴇ ᴛᴏ ᴛʜᴇ Pʀᴇᴍɪᴜᴍ Sᴛᴏʀᴇ.\n\n` +
+                `Sᴇʟᴇᴄᴛ ᴀɴ ᴏᴘᴛɪᴏɴ ʙᴇʟᴏᴡ 👇`;
     
     await ctx.replyWithHTML(msg, getMainMenu(ctx.from.id === ADMIN_ID));
 }
 
 // ============================================================
-// 🛍 সোর্স কোড শপ (View Products)
+// 🛍 SHOP SYSTEM (Catalog View -> Detail View)
 // ============================================================
 
-bot.action('menu_source', async (ctx) => {
-    await ctx.deleteMessage().catch(e => {});
-    await showProductIndex(ctx, 0);
-});
-
-bot.action(/view_index_(\d+)/, async (ctx) => {
-    const index = parseInt(ctx.match[1]);
-    await showProductIndex(ctx, index);
-});
-
-async function showProductIndex(ctx, index) {
+// Step 1: Show List of Products
+bot.action('menu_shop', async (ctx) => {
     const products = await getActiveProducts();
-
     if (products.length === 0) {
-        return ctx.replyWithHTML("⚠️ দোকানে এখন কোনো প্রোডাক্ট নেই।", getMainMenu(ctx.from.id === ADMIN_ID));
+        return ctx.answerCbQuery("🚫 Store is empty!", { show_alert: true });
     }
 
-    if (index < 0) index = 0;
-    if (index >= products.length) index = products.length - 1;
+    // Create buttons with just Titles
+    const buttons = products.map(p => [
+        Markup.button.callback(`📦 ${p.title}`, `view_prod_${p.id}`)
+    ]);
+    buttons.push([Markup.button.callback('🔙 Back', 'home_cmd')]);
 
-    const p = products[index];
+    await ctx.deleteMessage().catch(e=>{});
+    await ctx.replyWithHTML(
+        `<b>🛒 Sᴏᴜʀᴄᴇ Cᴏᴅᴇ Cᴀᴛᴀʟᴏɢ</b>\n\n` +
+        `Sᴇʟᴇᴄᴛ ᴀɴ ɪᴛᴇᴍ ᴛᴏ ᴠɪᴇᴡ ᴅᴇᴛᴀɪʟꜱ:`,
+        Markup.inlineKeyboard(buttons)
+    );
+});
 
-    const caption = `💻 <b>${p.title}</b>\n\n` +
-                    `${p.description}\n\n` +
-                    `➖➖➖➖➖➖➖➖\n` +
-                    `💰 দাম: <b>${p.price} Coins</b>\n` +
-                    `📦 ভার্সন: ${p.version}\n` +
-                    `🛠 টেকনোলজি: ${p.tech}`;
-
-    // বাটন তৈরি
-    const btnBuy = [Markup.button.callback(`🛒 কিনুন (${p.price} 🪙)`, `buy_${p.id}`)];
-    
-    // নেভিগেশন বাটন
-    const btnNav = [];
-    if (index > 0) btnNav.push(Markup.button.callback('⬅️ আগে', `view_index_${index - 1}`));
-    if (index < products.length - 1) btnNav.push(Markup.button.callback('পরে ➡️', `view_index_${index + 1}`));
-    
-    const btnBack = [Markup.button.callback('🔙 হোম', 'home_cmd')];
-
-    const keyboard = Markup.inlineKeyboard([btnBuy, btnNav, btnBack]);
-
-    try {
-        // আগের মেসেজ এডিট করার চেষ্টা
-        if (ctx.callbackQuery && ctx.callbackQuery.message.photo) {
-            await ctx.editMessageMedia({
-                type: 'photo',
-                media: p.imageId || 'https://via.placeholder.com/800x400',
-                caption: caption,
-                parse_mode: 'HTML'
-            }, keyboard);
-        } else if (ctx.callbackQuery && ctx.callbackQuery.message.text) {
-            // টেক্সট মেসেজ থাকলে ডিলিট করে নতুন পাঠাবে
-            await ctx.deleteMessage();
-            await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...keyboard });
-        } else {
-            await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...keyboard });
-        }
-    } catch (e) {
-        // এরর হলে ফ্রেশ মেসেজ
-        try { await ctx.deleteMessage(); } catch(err){}
-        await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...keyboard });
-    }
+// Helper: Get Products
+async function getActiveProducts() {
+    const snap = await db.ref('products').orderByChild('active').equalTo(true).once('value');
+    const data = snap.val();
+    if (!data) return [];
+    return Object.keys(data).map(key => ({ id: key, ...data[key] })).reverse();
 }
 
-// 🛒 কেনার লজিক
+// Step 2: Show Single Product Detail
+bot.action(/view_prod_(.+)/, async (ctx) => {
+    const prodId = ctx.match[1];
+    const pSnap = await db.ref(`products/${prodId}`).once('value');
+    if (!pSnap.exists()) return ctx.answerCbQuery("Product not found!");
+    const p = pSnap.val();
+
+    const caption = `<b>📦 ${p.title}</b>\n\n` +
+                    `📝 ${p.description}\n\n` +
+                    `➖➖➖➖➖➖➖➖\n` +
+                    `💰 Pʀɪᴄᴇ: <b>${p.price} Cᴏɪɴꜱ</b>\n` +
+                    `📦 Vᴇʀꜱɪᴏɴ: ${p.version}\n` +
+                    `🛠 Tᴇᴄʜ: ${p.tech}`;
+
+    const buttons = Markup.inlineKeyboard([
+        [Markup.button.callback(`🛒 Buy Now (${p.price} 🪙)`, `buy_${p.id}`)],
+        [Markup.button.callback('🔙 Back to List', 'menu_shop')]
+    ]);
+
+    try {
+        if (ctx.callbackQuery.message.photo) {
+            await ctx.editMessageMedia({ type: 'photo', media: p.imageId, caption: caption, parse_mode: 'HTML' }, buttons);
+        } else {
+            await ctx.deleteMessage();
+            await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...buttons });
+        }
+    } catch(e) {
+        await ctx.deleteMessage().catch(()=>{});
+        await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...buttons });
+    }
+});
+
+// Step 3: Buy Logic
 bot.action(/buy_(.+)/, async (ctx) => {
     const prodId = ctx.match[1];
     const uid = ctx.from.id;
     const user = await getUser(uid);
-    
-    // প্রোডাক্ট ডাটা আনা
     const pSnap = await db.ref(`products/${prodId}`).once('value');
-    if (!pSnap.exists()) return ctx.answerCbQuery("প্রোডাক্ট পাওয়া যায়নি।", { show_alert: true });
     const p = pSnap.val();
 
-    // ১. অলরেডি কেনা আছে কিনা
     const owned = await db.ref(`purchases/${uid}/${prodId}`).once('value');
-    if (owned.exists()) {
-        return ctx.answerCbQuery("✅ এটি আপনার কেনা আছে!", { show_alert: true });
-    }
+    if (owned.exists()) return ctx.answerCbQuery("✅ Already Purchased!", { show_alert: true });
 
-    // ২. ব্যালেন্স চেক
     if (!user || user.balance < p.price) {
-        const shortAmount = p.price - (user ? user.balance : 0);
+        const short = p.price - (user ? user.balance : 0);
         const adUrl = `${DOMAIN}/ads.html?uid=${uid}`;
-        
-        await ctx.deleteMessage().catch(e => {});
+        await ctx.deleteMessage().catch(e=>{});
         return ctx.replyWithHTML(
-            `⚠️ <b>পর্যাপ্ত ব্যালেন্স নেই!</b>\n\n` +
-            `এই কোডটি কিনতে আরো <b>${shortAmount} Coins</b> লাগবে।\n` +
-            `অ্যাড দেখে ফ্রি কয়েন আয় করুন 👇`,
+            `⚠️ <b>Iɴꜱᴜꜰꜰɪᴄɪᴇɴᴛ Bᴀʟᴀɴᴄᴇ!</b>\n\n` +
+            `Yᴏᴜ ɴᴇᴇᴅ <b>${short} ᴄᴏɪɴꜱ</b> ᴍᴏʀᴇ.\n` +
+            `Wᴀᴛᴄʜ ᴀᴅs ᴛᴏ ᴇᴀʀɴ ꜰʀᴇᴇ ᴄᴏɪɴꜱ 👇`,
             Markup.inlineKeyboard([
-                [Markup.button.webApp('📺 কয়েন আর্ন করুন', adUrl)],
-                [Markup.button.callback('🔙 হোম', 'home_cmd')]
+                [Markup.button.webApp('📺 Earn Coins', adUrl)],
+                [Markup.button.callback('🔙 Back', 'menu_shop')]
             ])
         );
     }
 
-    // ৩. পেমেন্ট সফল
+    // Success
     await updateUserBalance(uid, -p.price);
     await db.ref(`purchases/${uid}/${prodId}`).set({ purchasedAt: Date.now(), price: p.price });
     
-    await ctx.deleteMessage().catch(e => {});
-    await ctx.replyWithHTML(
-        `🎉 <b>কেনাকাটা সফল হয়েছে!</b>\n\n` +
+    await ctx.editMessageCaption(
+        `🎉 <b>Pᴜʀᴄʜᴀꜱᴇ Sᴜᴄᴄᴇꜱꜱꜰᴜʟ!</b>\n\n` +
         `📦 <b>${p.title}</b>\n` +
-        `🔗 ডাউনলোড লিংক: ${p.link}\n\n` +
-        `<i>লিংকটি 'My Library' তেও সেভ করা হয়েছে।</i>`,
-        Markup.inlineKeyboard([[Markup.button.callback('🔙 হোম', 'home_cmd')]])
+        `🔗 Download: ${p.link}\n\n` +
+        `<i>Check 'My Library' for future access.</i>`,
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔙 Home', callback_data: 'home_cmd' }]] } }
     );
 });
 
 // ============================================================
-// 🤝 রেফারেল সিস্টেম
+// 🤝 Referral, Wallet, Library & Support
 // ============================================================
 
 bot.action('menu_refer', async (ctx) => {
     const uid = ctx.from.id;
     const user = await getUser(uid);
-    const botUser = await bot.telegram.getMe();
-    
-    const refLink = `https://t.me/${botUser.username}?start=${uid}`;
-    const totalRefs = (user && user.referrals) ? user.referrals : 0;
+    const botInfo = await bot.telegram.getMe();
+    const link = `https://t.me/${botInfo.username}?start=${uid}`;
+    const count = user && user.referrals ? user.referrals : 0;
 
-    const msg = `🤝 <b>Refer & Earn</b>\n\n` +
-                `প্রতি রেফারে পান <b>${REFERRAL_BONUS} Coins</b>!\n\n` +
-                `👤 আপনার রেফার: <b>${totalRefs} জন</b>\n` +
-                `💰 মোট আর্নিং: <b>${totalRefs * REFERRAL_BONUS} Coins</b>\n\n` +
-                `🔗 <b>আপনার লিংক:</b>\n` +
-                `<code>${refLink}</code>`;
-
-    await ctx.deleteMessage().catch(e => {});
-    ctx.replyWithHTML(msg, Markup.inlineKeyboard([[Markup.button.callback('🔙 হোম', 'home_cmd')]]));
+    await ctx.deleteMessage().catch(e=>{});
+    ctx.replyWithHTML(
+        `🤝 <b>Rᴇꜰᴇʀ & Eᴀʀɴ</b>\n\n` +
+        `Eᴀʀɴ <b>${REFERRAL_BONUS} Cᴏɪɴꜱ</b> ꜰᴏʀ ᴇᴀᴄʜ ғʀɪᴇɴᴅ!\n\n` +
+        `👥 Tᴏᴛᴀʟ Rᴇꜰᴇʀʀᴀʟꜱ: <b>${count}</b>\n` +
+        `💰 Tᴏᴛᴀʟ Eᴀʀɴᴇᴅ: <b>${count * REFERRAL_BONUS}</b>\n\n` +
+        `🔗 <code>${link}</code>`,
+        Markup.inlineKeyboard([[Markup.button.callback('🔙 Back', 'home_cmd')]])
+    );
 });
-
-// ============================================================
-// 💰 ওয়ালেট এবং লাইব্রেরি
-// ============================================================
 
 bot.action('menu_wallet', async (ctx) => {
     const user = await getUser(ctx.from.id);
+    const bal = user ? user.balance : 0;
     const adUrl = `${DOMAIN}/ads.html?uid=${ctx.from.id}`;
     
-    await ctx.deleteMessage().catch(e => {});
+    await ctx.deleteMessage().catch(e=>{});
     ctx.replyWithHTML(
-        `💰 <b>আপনার ওয়ালেট</b>\n\n` +
-        `বর্তমান ব্যালেন্স: <b>${user ? user.balance : 0} Coins</b>\n\n` +
-        `ব্যালেন্স বাড়াতে অ্যাড দেখুন 👇`,
+        `💰 <b>Yᴏᴜʀ Wᴀʟʟᴇᴛ</b>\n\n` +
+        `Cᴜʀʀᴇɴᴛ Bᴀʟᴀɴᴄᴇ: <b>${bal} Cᴏɪɴꜱ</b>`,
         Markup.inlineKeyboard([
-            [Markup.button.webApp('📺 ভিডিও দেখুন (+10)', adUrl)],
-            [Markup.button.callback('🔙 হোম', 'home_cmd')]
+            [Markup.button.webApp('📺 Watch Ad (+10)', adUrl)],
+            [Markup.button.callback('🔙 Back', 'home_cmd')]
         ])
     );
 });
 
 bot.action('menu_library', async (ctx) => {
-    const uid = ctx.from.id;
-    const purchasesSnap = await db.ref(`purchases/${uid}`).once('value');
-    const purchases = purchasesSnap.val();
-    
-    if (!purchases) {
-        return ctx.answerCbQuery("আপনার লাইব্রেরি খালি!", { show_alert: true });
-    }
+    const snap = await db.ref(`purchases/${ctx.from.id}`).once('value');
+    const data = snap.val();
+    if (!data) return ctx.answerCbQuery("🚫 Library is empty!", { show_alert: true });
 
-    let msg = "📂 <b>আমার কালেকশন:</b>\n\n";
-    const buttons = [];
-    
-    for (const pid of Object.keys(purchases)) {
+    let buttons = [];
+    for (const pid of Object.keys(data)) {
         const pSnap = await db.ref(`products/${pid}`).once('value');
-        const p = pSnap.val();
-        if(p) {
-            msg += `🔹 ${p.title}\n`;
-            buttons.push([Markup.button.callback(`📥 ${p.title}`, `dl_${pid}`)]);
-        }
+        if(pSnap.val()) buttons.push([Markup.button.callback(`📥 ${pSnap.val().title}`, `dl_${pid}`)]);
     }
-    buttons.push([Markup.button.callback('🔙 হোম', 'home_cmd')]);
-    
-    await ctx.deleteMessage().catch(e => {});
-    ctx.replyWithHTML(msg, Markup.inlineKeyboard(buttons));
+    buttons.push([Markup.button.callback('🔙 Back', 'home_cmd')]);
+
+    await ctx.deleteMessage().catch(e=>{});
+    ctx.replyWithHTML(`📂 <b>Mʏ Lɪʙʀᴀʀʏ</b>`, Markup.inlineKeyboard(buttons));
 });
 
 bot.action(/dl_(.+)/, async (ctx) => {
-    const pid = ctx.match[1];
-    const p = (await db.ref(`products/${pid}`).once('value')).val();
-    if(p) {
-        await ctx.replyWithHTML(`🔗 <b>${p.title}</b>\n\nডাউনলোড লিংক: ${p.link}`);
-    }
+    const p = (await db.ref(`products/${ctx.match[1]}`).once('value')).val();
+    if(p) ctx.replyWithHTML(`🔗 <b>${p.title}</b>\n\nLink: ${p.link}`);
 });
 
-// ============================================================
-// 💬 সাপোর্ট
-// ============================================================
-
 bot.action('menu_support', async (ctx) => {
-    await ctx.deleteMessage().catch(e => {});
+    await ctx.deleteMessage().catch(e=>{});
     ctx.replyWithHTML(
-        `💬 <b>Need Help?</b>\n\n` +
-        `যেকোনো সমস্যায় আমাদের সাপোর্ট টিমের সাথে যোগাযোগ করুন।\n\n` +
-        `👤 Support: @lagatech`,
-        Markup.inlineKeyboard([[Markup.button.url('📩 Message Support', 'https://t.me/lagatech'), [Markup.button.callback('🔙 হোম', 'home_cmd')]]])
+        `💬 <b>Nᴇᴇᴅ Hᴇʟᴘ?</b>\n\nContact support for any issues.`,
+        Markup.inlineKeyboard([
+            [Markup.button.url('📩 Contact Admin', 'https://t.me/lagatech')],
+            [Markup.button.callback('🔙 Back', 'home_cmd')]
+        ])
     );
 });
 
-// হোম এ ফেরার জন্য
 bot.action('home_cmd', (ctx) => sendHome(ctx));
 
 // ============================================================
-// 👑 অ্যাডমিন প্যানেল (Delete & Management)
+// 👑 Admin Panel
 // ============================================================
 
 bot.action('admin_panel', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    await ctx.deleteMessage().catch(e => {});
-    ctx.replyWithHTML("👑 <b>Admin Panel</b>", Markup.inlineKeyboard([
-        [Markup.button.callback('➕ প্রোডাক্ট অ্যাড', 'admin_add_start')],
-        [Markup.button.callback('🗑 প্রোডাক্ট ডিলিট', 'admin_delete_list')], // নতুন অপশন
-        [Markup.button.callback('📢 ব্রডকাস্ট', 'admin_cast_start')],
-        [Markup.button.callback('🔙 হোম', 'home_cmd')]
+    await ctx.deleteMessage().catch(e=>{});
+    ctx.replyWithHTML("👑 <b>Aᴅᴍɪɴ Pᴀɴᴇʟ</b>", Markup.inlineKeyboard([
+        [Markup.button.callback('➕ Add Product', 'admin_add_start')],
+        [Markup.button.callback('🗑 Delete Product', 'admin_delete_list')],
+        [Markup.button.callback('📢 Broadcast', 'admin_cast_start')],
+        [Markup.button.callback('🔙 Home', 'home_cmd')]
     ]));
 });
 
-// --- ডিলিট প্রোডাক্ট লিস্ট ---
+// Delete List
 bot.action('admin_delete_list', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const products = await getActiveProducts();
+    const buttons = products.map(p => [Markup.button.callback(`🗑 ${p.title}`, `del_${p.id}`)]);
+    buttons.push([Markup.button.callback('🔙 Back', 'admin_panel')]);
     
-    if (products.length === 0) {
-        return ctx.answerCbQuery("ডিলিট করার মতো কিছু নেই।", { show_alert: true });
-    }
-
-    const buttons = products.map(p => [Markup.button.callback(`🗑 ${p.title}`, `del_confirm_${p.id}`)]);
-    buttons.push([Markup.button.callback('🔙 ব্যাক', 'admin_panel')]);
-
-    await ctx.deleteMessage().catch(e => {});
-    ctx.replyWithHTML("🗑 <b>প্রোডাক্ট ডিলিট করুন:</b>", Markup.inlineKeyboard(buttons));
+    await ctx.deleteMessage().catch(e=>{});
+    ctx.replyWithHTML("🗑 <b>Select product to delete:</b>", Markup.inlineKeyboard(buttons));
 });
 
-// --- ডিলিট কনফার্মেশন ---
-bot.action(/del_confirm_(.+)/, async (ctx) => {
+bot.action(/del_(.+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    const prodId = ctx.match[1];
-    
-    // ডিলিট করার আগে প্রোডাক্টের নাম জানতে চাইলেও পারি, সরাসরি ডিলিট করা হচ্ছে
-    await db.ref(`products/${prodId}`).remove();
-    await ctx.answerCbQuery("✅ ডিলিট করা হয়েছে!", { show_alert: true });
-    
-    // লিস্ট রিফ্রেশ
-    return ctx.triggerAction('admin_delete_list'); 
+    await db.ref(`products/${ctx.match[1]}`).remove();
+    ctx.answerCbQuery("✅ Deleted!");
+    ctx.triggerAction('admin_delete_list');
 });
 
-// --- প্রোডাক্ট অ্যাড উইজার্ড ---
+// Add Product Wizard
 bot.action('admin_add_start', (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     adminState[ADMIN_ID] = { type: 'PRODUCT', step: 'PHOTO', data: {} };
-    ctx.reply("📸 <b>ধাপ ১/৫:</b> কভার ফটো পাঠান।");
+    ctx.reply("📸 Step 1/5: Send Cover Photo.");
 });
 
-// --- ব্রডকাস্ট উইজার্ড ---
+// Broadcast Wizard
 bot.action('admin_cast_start', (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     adminState[ADMIN_ID] = { type: 'BROADCAST', step: 'PHOTO', data: {} };
-    ctx.reply("📢 <b>ব্রডকাস্ট - ধাপ ১/৩:</b> ছবি পাঠান (না চাইলে 'skip' লিখুন)।");
+    ctx.reply("📢 Step 1/3: Send Photo (or type 'skip').");
 });
 
 // ============================================================
-// 🧞 উইজার্ড হ্যান্ডলার (Chat Logic)
+// 🧞 Wizard Handler
 // ============================================================
-
 async function handleAdminWizard(ctx) {
     const state = adminState[ADMIN_ID];
     const text = ctx.message.text || '';
-    const msgId = ctx.message.message_id;
 
     if (state.type === 'BROADCAST') {
         if (state.step === 'PHOTO') {
-            if (ctx.message.photo) {
-                state.data.photo = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-            }
+            if (ctx.message.photo) state.data.photo = ctx.message.photo.pop().file_id;
             state.step = 'TEXT';
-            await ctx.reply("📝 মেসেজ টেক্সট লিখুন:");
-            return;
-        }
-        if (state.step === 'TEXT') {
-            if (text.toLowerCase() !== 'skip') state.data.text = text;
+            ctx.reply("📝 Step 2/3: Send Caption text:");
+        } else if (state.step === 'TEXT') {
+            state.data.text = text;
             state.step = 'BTN';
-            await ctx.reply("🔘 বাটন যোগ করবেন? ফরম্যাট: Name|URL (না চাইলে 'skip')");
-            return;
-        }
-        if (state.step === 'BTN') {
-            // ব্রডকাস্ট প্রসেস
-            const usersSnap = await db.ref('users').once('value');
-            const users = usersSnap.val() || {};
+            ctx.reply("🔘 Step 3/3: Button (Name|URL) or 'skip'):");
+        } else if (state.step === 'BTN') {
+            const users = (await db.ref('users').once('value')).val() || {};
             let count = 0;
-            
             let extra = { parse_mode: 'HTML' };
-            if (text && text.includes('|')) {
-                const parts = text.split('|');
-                extra.reply_markup = { inline_keyboard: [[{ text: parts[0], url: parts[1] }]] };
+            if (text.includes('|')) {
+                const [name, url] = text.split('|');
+                extra.reply_markup = { inline_keyboard: [[{ text: name, url: url }]] };
             }
-
-            await ctx.reply("⏳ ব্রডকাস্ট শুরু হচ্ছে, অপেক্ষা করুন...");
             
+            ctx.reply("⏳ Broadcasting...");
             for (const uid of Object.keys(users)) {
                 try {
-                    if (state.data.photo) {
-                        await bot.telegram.sendPhoto(uid, state.data.photo, { caption: state.data.text || '', ...extra });
-                    } else {
-                        await bot.telegram.sendMessage(uid, state.data.text || ' ', extra);
-                    }
+                    if (state.data.photo) await bot.telegram.sendPhoto(uid, state.data.photo, { caption: state.data.text, ...extra });
+                    else await bot.telegram.sendMessage(uid, state.data.text, extra);
                     count++;
-                    // Rate Limiting এর জন্য অল্প বিরতি
-                    if(count % 20 === 0) await new Promise(r => setTimeout(r, 1000)); 
-                } catch (e) {}
+                    if (count % 20 === 0) await new Promise(r => setTimeout(r, 1000));
+                } catch(e){}
             }
-            
             delete adminState[ADMIN_ID];
-            await ctx.reply(`✅ শেষ! মোট পাঠানো হয়েছে: ${count} জনকে।`);
+            ctx.reply(`✅ Broadcast sent to ${count} users.`);
         }
         return;
     }
 
     if (state.type === 'PRODUCT') {
         if (state.step === 'PHOTO') {
-            if (ctx.message.photo) {
-                state.data.imageId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-                state.step = 'TITLE';
-                await ctx.reply("📝 টাইটেল লিখুন:");
-            } else {
-                await ctx.reply("❌ ছবি দিতেই হবে!");
-            }
-            return;
-        }
-        if (state.step === 'TITLE') {
+            if (!ctx.message.photo) return ctx.reply("❌ Photo required!");
+            state.data.imageId = ctx.message.photo.pop().file_id;
+            state.step = 'TITLE';
+            ctx.reply("📝 Step 2/5: Send Title:");
+        } else if (state.step === 'TITLE') {
             state.data.title = text;
             state.step = 'DESC';
-            await ctx.reply("📄 ডেসক্রিপশন লিখুন:");
-            return;
-        }
-        if (state.step === 'DESC') {
+            ctx.reply("📄 Step 3/5: Send Description:");
+        } else if (state.step === 'DESC') {
             state.data.description = text;
             state.step = 'INFO';
-            await ctx.reply("💰 ফরম্যাট: Price|Version|Tech\nউদাহরণ: 500|v2.0|Node.js");
-            return;
-        }
-        if (state.step === 'INFO') {
+            ctx.reply("💰 Step 4/5: Format: Price|Version|Tech");
+        } else if (state.step === 'INFO') {
             const p = text.split('|');
-            if(p.length < 3) return ctx.reply("❌ ভুল ফরম্যাট। আবার চেষ্টা করুন।");
+            if (p.length < 3) return ctx.reply("❌ Invalid format. Try again.");
             state.data.price = parseInt(p[0]);
             state.data.version = p[1];
             state.data.tech = p[2];
             state.step = 'LINK';
-            await ctx.reply("🔗 ডাউনলোড লিংক দিন:");
-            return;
-        }
-        if (state.step === 'LINK') {
+            ctx.reply("🔗 Step 5/5: Send Download Link:");
+        } else if (state.step === 'LINK') {
             state.data.link = text;
             state.data.active = true;
             await db.ref('products').push(state.data);
             delete adminState[ADMIN_ID];
-            await ctx.reply("✅ প্রোডাক্ট সফলভাবে অ্যাড হয়েছে!");
+            ctx.reply("✅ Product Added Successfully!");
         }
     }
 }
 
 // ============================================================
-// 🌐 সার্ভার এবং এপিআই
+// 🌐 API & Server
 // ============================================================
 
 app.post('/api/reward', async (req, res) => {
     const { uid } = req.body;
     if (!uid) return res.status(400).json({ error: 'No UID' });
-
+    
     await updateUserBalance(uid, 10);
     const user = await getUser(uid);
-
-    try {
-        await bot.telegram.sendMessage(uid, "🎁 <b>+10 Coins Added!</b>", { parse_mode: 'HTML', disable_notification: true });
-    } catch(e){}
-
+    
+    // Optional: Send silent notification or just update balance
     res.json({ success: true, newBalance: user ? user.balance : 0 });
 });
 
 app.use(bot.webhookCallback('/bot'));
 
 app.listen(PORT, async () => {
-    console.log(`Server running on ${PORT}`);
-    if (DOMAIN) await bot.telegram.setWebhook(`${DOMAIN}/bot`);
+    console.log(`Server running on port ${PORT}`);
+    if (DOMAIN) {
+        await bot.telegram.setWebhook(`${DOMAIN}/bot`);
+        console.log(`Webhook set to ${DOMAIN}/bot`);
+    }
 });
