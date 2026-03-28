@@ -1,30 +1,35 @@
 require('dotenv').config();
 const express = require('express');
 const { Telegraf, Markup } = require('telegraf');
-const db = require('./firebase'); // আপনার firebase config file
+const db = require('./firebase');
 
 // ⚙️ Configuration
 const PORT = process.env.PORT || 3000;
-const ADMIN_ID = parseInt(process.env.ADMIN_ID);
-const DOMAIN = process.env.RENDER_EXTERNAL_URL;
-const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_ID = parseInt(process.env.ADMIN_ID); // Render Environment থেকে নিবে
+const DOMAIN = process.env.RENDER_EXTERNAL_URL; // Render অটো দিবে
+const BOT_TOKEN = process.env.BOT_TOKEN; // Render Environment থেকে নিবে
 const REFERRAL_BONUS = 50;
+
+if (!BOT_TOKEN || !ADMIN_ID) {
+    console.error("Error: BOT_TOKEN or ADMIN_ID is missing in .env");
+    process.exit(1);
+}
 
 const app = express();
 const bot = new Telegraf(BOT_TOKEN);
 
 app.use(express.json());
-app.use(express.static('public')); // public folder for ads.html
+app.use(express.static('public'));
 
-// 🧠 Admin State
+// 🧠 Admin State for Wizards
 const adminState = {};
 
 // ============================================================
 // 🛠 Helper Functions
 // ============================================================
 
-// Fancy Text Generator (Basic)
-const f = (text) => {
+// Fancy Text Converter (Small Caps)
+const fancyText = (text) => {
     const map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ', 'g': 'ɢ', 'h': 'ʜ',
         'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ',
@@ -38,17 +43,26 @@ async function getUser(uid) {
     try {
         const snap = await db.ref(`users/${uid}`).once('value');
         return snap.val();
-    } catch (e) { return null; }
+    } catch (e) { console.error("DB Error getUser:", e); return null; }
 }
 
 async function updateUserBalance(uid, amount) {
     try {
         await db.ref(`users/${uid}/balance`).transaction((current) => (current || 0) + amount);
-    } catch (e) { console.error("Balance Update Error:", e); }
+    } catch (e) { console.error("DB Error updateBalance:", e); }
+}
+
+async function getActiveProducts() {
+    try {
+        const snap = await db.ref('products').orderByChild('active').equalTo(true).once('value');
+        const data = snap.val();
+        if (!data) return [];
+        return Object.keys(data).map(key => ({ id: key, ...data[key] })).reverse();
+    } catch (e) { console.error("DB Error getProducts:", e); return []; }
 }
 
 // ============================================================
-// 🤖 Middleware & User Registration
+// 🤖 Middleware & Registration
 // ============================================================
 
 bot.use(async (ctx, next) => {
@@ -58,18 +72,19 @@ bot.use(async (ctx, next) => {
 
         if (!snap.exists()) {
             let referrerId = null;
+            // Referral Logic
             if (ctx.startPayload && ctx.startPayload != uid && !isNaN(ctx.startPayload)) {
                 referrerId = parseInt(ctx.startPayload);
                 await updateUserBalance(referrerId, REFERRAL_BONUS);
                 await db.ref(`users/${referrerId}/referrals`).transaction(c => (c || 0) + 1);
                 try {
-                    // Premium Referral Notification
                     await bot.telegram.sendMessage(referrerId, 
                         `🎉 <b>Nᴇᴡ Rᴇꜰᴇʀʀᴀʟ Jᴏɪɴᴇᴅ!</b>\n💰 Yᴏᴜ Iɴꜱᴛᴀɴᴛʟʏ Rᴇᴄᴇɪᴠᴇᴅ <b>+${REFERRAL_BONUS} Cᴏɪɴꜱ</b>!`, 
-                        {parse_mode: 'HTML'}
+                        { parse_mode: 'HTML' }
                     );
-                } catch(e){}
+                } catch (e) {}
             }
+
             await db.ref(`users/${uid}`).set({
                 firstName: ctx.from.first_name,
                 username: ctx.from.username || 'none',
@@ -79,15 +94,17 @@ bot.use(async (ctx, next) => {
             });
         }
     }
-    
+
+    // Admin Wizard Handler
     if (ctx.from && ctx.from.id === ADMIN_ID && adminState[ADMIN_ID] && ctx.message) {
         return handleAdminWizard(ctx);
     }
+
     return next();
 });
 
 // ============================================================
-// 🎨 Menus
+// 🎨 Keyboards & Menus
 // ============================================================
 
 const getMainMenu = (isAdmin) => {
@@ -103,7 +120,7 @@ const getMainMenu = (isAdmin) => {
 bot.command('start', async (ctx) => await sendHome(ctx));
 
 async function sendHome(ctx) {
-    try { if(ctx.callbackQuery) await ctx.deleteMessage(); } catch(e){}
+    try { if (ctx.callbackQuery) await ctx.deleteMessage(); } catch (e) {}
     const user = await getUser(ctx.from.id);
     const bal = user ? user.balance : 0;
     
@@ -116,43 +133,33 @@ async function sendHome(ctx) {
 }
 
 // ============================================================
-// 🛍 SHOP SYSTEM (Catalog View -> Detail View)
+// 🛍 SHOP SYSTEM (Catalog -> Detail)
 // ============================================================
 
-// Step 1: Show List of Products
+// Show Catalog List
 bot.action('menu_shop', async (ctx) => {
     const products = await getActiveProducts();
     if (products.length === 0) {
-        return ctx.answerCbQuery("🚫 Store is empty!", { show_alert: true });
+        await ctx.answerCbQuery("🚫 Store is empty!", { show_alert: true });
+        return ctx.replyWithHTML("<b>🚫 No products available yet.</b>", getMainMenu(ctx.from.id === ADMIN_ID));
     }
 
-    // Create buttons with just Titles
-    const buttons = products.map(p => [
-        Markup.button.callback(`📦 ${p.title}`, `view_prod_${p.id}`)
-    ]);
+    // Create buttons with Titles only
+    const buttons = products.map(p => [Markup.button.callback(`📦 ${p.title}`, `view_prod_${p.id}`)]);
     buttons.push([Markup.button.callback('🔙 Back', 'home_cmd')]);
 
-    await ctx.deleteMessage().catch(e=>{});
+    try { await ctx.deleteMessage(); } catch(e){}
     await ctx.replyWithHTML(
-        `<b>🛒 Sᴏᴜʀᴄᴇ Cᴏᴅᴇ Cᴀᴛᴀʟᴏɢ</b>\n\n` +
-        `Sᴇʟᴇᴄᴛ ᴀɴ ɪᴛᴇᴍ ᴛᴏ ᴠɪᴇᴡ ᴅᴇᴛᴀɪʟꜱ:`,
+        `<b>🛒 Sᴏᴜʀᴄᴇ Cᴏᴅᴇ Cᴀᴛᴀʟᴏɢ</b>\n\nSelect an item to view details:`,
         Markup.inlineKeyboard(buttons)
     );
 });
 
-// Helper: Get Products
-async function getActiveProducts() {
-    const snap = await db.ref('products').orderByChild('active').equalTo(true).once('value');
-    const data = snap.val();
-    if (!data) return [];
-    return Object.keys(data).map(key => ({ id: key, ...data[key] })).reverse();
-}
-
-// Step 2: Show Single Product Detail
+// Show Product Detail
 bot.action(/view_prod_(.+)/, async (ctx) => {
     const prodId = ctx.match[1];
     const pSnap = await db.ref(`products/${prodId}`).once('value');
-    if (!pSnap.exists()) return ctx.answerCbQuery("Product not found!");
+    if (!pSnap.exists()) return ctx.answerCbQuery("Error: Not found!");
     const p = pSnap.val();
 
     const caption = `<b>📦 ${p.title}</b>\n\n` +
@@ -168,19 +175,21 @@ bot.action(/view_prod_(.+)/, async (ctx) => {
     ]);
 
     try {
+        // If previous message is a photo, edit media. If text, delete and send new.
         if (ctx.callbackQuery.message.photo) {
             await ctx.editMessageMedia({ type: 'photo', media: p.imageId, caption: caption, parse_mode: 'HTML' }, buttons);
         } else {
             await ctx.deleteMessage();
             await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...buttons });
         }
-    } catch(e) {
-        await ctx.deleteMessage().catch(()=>{});
+    } catch (e) {
+        // Fallback if edit fails
+        try { await ctx.deleteMessage(); } catch(err){}
         await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...buttons });
     }
 });
 
-// Step 3: Buy Logic
+// Buy Logic
 bot.action(/buy_(.+)/, async (ctx) => {
     const prodId = ctx.match[1];
     const uid = ctx.from.id;
@@ -188,13 +197,16 @@ bot.action(/buy_(.+)/, async (ctx) => {
     const pSnap = await db.ref(`products/${prodId}`).once('value');
     const p = pSnap.val();
 
+    // Check if already purchased
     const owned = await db.ref(`purchases/${uid}/${prodId}`).once('value');
     if (owned.exists()) return ctx.answerCbQuery("✅ Already Purchased!", { show_alert: true });
 
+    // Check Balance
     if (!user || user.balance < p.price) {
         const short = p.price - (user ? user.balance : 0);
         const adUrl = `${DOMAIN}/ads.html?uid=${uid}`;
-        await ctx.deleteMessage().catch(e=>{});
+        
+        try { await ctx.deleteMessage(); } catch(e){}
         return ctx.replyWithHTML(
             `⚠️ <b>Iɴꜱᴜꜰꜰɪᴄɪᴇɴᴛ Bᴀʟᴀɴᴄᴇ!</b>\n\n` +
             `Yᴏᴜ ɴᴇᴇᴅ <b>${short} ᴄᴏɪɴꜱ</b> ᴍᴏʀᴇ.\n` +
@@ -206,10 +218,10 @@ bot.action(/buy_(.+)/, async (ctx) => {
         );
     }
 
-    // Success
+    // Success Transaction
     await updateUserBalance(uid, -p.price);
     await db.ref(`purchases/${uid}/${prodId}`).set({ purchasedAt: Date.now(), price: p.price });
-    
+
     await ctx.editMessageCaption(
         `🎉 <b>Pᴜʀᴄʜᴀꜱᴇ Sᴜᴄᴄᴇꜱꜱꜰᴜʟ!</b>\n\n` +
         `📦 <b>${p.title}</b>\n` +
@@ -220,7 +232,7 @@ bot.action(/buy_(.+)/, async (ctx) => {
 });
 
 // ============================================================
-// 🤝 Referral, Wallet, Library & Support
+// 🤝 Referral, Wallet, Library, Support
 // ============================================================
 
 bot.action('menu_refer', async (ctx) => {
@@ -230,7 +242,7 @@ bot.action('menu_refer', async (ctx) => {
     const link = `https://t.me/${botInfo.username}?start=${uid}`;
     const count = user && user.referrals ? user.referrals : 0;
 
-    await ctx.deleteMessage().catch(e=>{});
+    try { await ctx.deleteMessage(); } catch(e){}
     ctx.replyWithHTML(
         `🤝 <b>Rᴇꜰᴇʀ & Eᴀʀɴ</b>\n\n` +
         `Eᴀʀɴ <b>${REFERRAL_BONUS} Cᴏɪɴꜱ</b> ꜰᴏʀ ᴇᴀᴄʜ ғʀɪᴇɴᴅ!\n\n` +
@@ -245,11 +257,10 @@ bot.action('menu_wallet', async (ctx) => {
     const user = await getUser(ctx.from.id);
     const bal = user ? user.balance : 0;
     const adUrl = `${DOMAIN}/ads.html?uid=${ctx.from.id}`;
-    
-    await ctx.deleteMessage().catch(e=>{});
+
+    try { await ctx.deleteMessage(); } catch(e){}
     ctx.replyWithHTML(
-        `💰 <b>Yᴏᴜʀ Wᴀʟʟᴇᴛ</b>\n\n` +
-        `Cᴜʀʀᴇɴᴛ Bᴀʟᴀɴᴄᴇ: <b>${bal} Cᴏɪɴꜱ</b>`,
+        `💰 <b>Yᴏᴜʀ Wᴀʟʟᴇᴛ</b>\n\nCᴜʀʀᴇɴᴛ Bᴀʟᴀɴᴄᴇ: <b>${bal} Cᴏɪɴꜱ</b>`,
         Markup.inlineKeyboard([
             [Markup.button.webApp('📺 Watch Ad (+10)', adUrl)],
             [Markup.button.callback('🔙 Back', 'home_cmd')]
@@ -265,21 +276,21 @@ bot.action('menu_library', async (ctx) => {
     let buttons = [];
     for (const pid of Object.keys(data)) {
         const pSnap = await db.ref(`products/${pid}`).once('value');
-        if(pSnap.val()) buttons.push([Markup.button.callback(`📥 ${pSnap.val().title}`, `dl_${pid}`)]);
+        if (pSnap.val()) buttons.push([Markup.button.callback(`📥 ${pSnap.val().title}`, `dl_${pid}`)]);
     }
     buttons.push([Markup.button.callback('🔙 Back', 'home_cmd')]);
 
-    await ctx.deleteMessage().catch(e=>{});
+    try { await ctx.deleteMessage(); } catch(e){}
     ctx.replyWithHTML(`📂 <b>Mʏ Lɪʙʀᴀʀʏ</b>`, Markup.inlineKeyboard(buttons));
 });
 
 bot.action(/dl_(.+)/, async (ctx) => {
     const p = (await db.ref(`products/${ctx.match[1]}`).once('value')).val();
-    if(p) ctx.replyWithHTML(`🔗 <b>${p.title}</b>\n\nLink: ${p.link}`);
+    if (p) ctx.replyWithHTML(`🔗 <b>${p.title}</b>\n\nDownload Link: ${p.link}`);
 });
 
 bot.action('menu_support', async (ctx) => {
-    await ctx.deleteMessage().catch(e=>{});
+    try { await ctx.deleteMessage(); } catch(e){}
     ctx.replyWithHTML(
         `💬 <b>Nᴇᴇᴅ Hᴇʟᴘ?</b>\n\nContact support for any issues.`,
         Markup.inlineKeyboard([
@@ -297,7 +308,7 @@ bot.action('home_cmd', (ctx) => sendHome(ctx));
 
 bot.action('admin_panel', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    await ctx.deleteMessage().catch(e=>{});
+    try { await ctx.deleteMessage(); } catch(e){}
     ctx.replyWithHTML("👑 <b>Aᴅᴍɪɴ Pᴀɴᴇʟ</b>", Markup.inlineKeyboard([
         [Markup.button.callback('➕ Add Product', 'admin_add_start')],
         [Markup.button.callback('🗑 Delete Product', 'admin_delete_list')],
@@ -312,8 +323,8 @@ bot.action('admin_delete_list', async (ctx) => {
     const products = await getActiveProducts();
     const buttons = products.map(p => [Markup.button.callback(`🗑 ${p.title}`, `del_${p.id}`)]);
     buttons.push([Markup.button.callback('🔙 Back', 'admin_panel')]);
-    
-    await ctx.deleteMessage().catch(e=>{});
+
+    try { await ctx.deleteMessage(); } catch(e){}
     ctx.replyWithHTML("🗑 <b>Select product to delete:</b>", Markup.inlineKeyboard(buttons));
 });
 
@@ -324,14 +335,14 @@ bot.action(/del_(.+)/, async (ctx) => {
     ctx.triggerAction('admin_delete_list');
 });
 
-// Add Product Wizard
+// Add Product Wizard Start
 bot.action('admin_add_start', (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     adminState[ADMIN_ID] = { type: 'PRODUCT', step: 'PHOTO', data: {} };
     ctx.reply("📸 Step 1/5: Send Cover Photo.");
 });
 
-// Broadcast Wizard
+// Broadcast Wizard Start
 bot.action('admin_cast_start', (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     adminState[ADMIN_ID] = { type: 'BROADCAST', step: 'PHOTO', data: {} };
@@ -339,12 +350,13 @@ bot.action('admin_cast_start', (ctx) => {
 });
 
 // ============================================================
-// 🧞 Wizard Handler
+// 🧞 Wizard Handler (Logic for Steps)
 // ============================================================
 async function handleAdminWizard(ctx) {
     const state = adminState[ADMIN_ID];
     const text = ctx.message.text || '';
 
+    // --- Broadcast Flow ---
     if (state.type === 'BROADCAST') {
         if (state.step === 'PHOTO') {
             if (ctx.message.photo) state.data.photo = ctx.message.photo.pop().file_id;
@@ -369,8 +381,8 @@ async function handleAdminWizard(ctx) {
                     if (state.data.photo) await bot.telegram.sendPhoto(uid, state.data.photo, { caption: state.data.text, ...extra });
                     else await bot.telegram.sendMessage(uid, state.data.text, extra);
                     count++;
-                    if (count % 20 === 0) await new Promise(r => setTimeout(r, 1000));
-                } catch(e){}
+                    if (count % 20 === 0) await new Promise(r => setTimeout(r, 1000)); // Rate limit
+                } catch (e) {}
             }
             delete adminState[ADMIN_ID];
             ctx.reply(`✅ Broadcast sent to ${count} users.`);
@@ -378,6 +390,7 @@ async function handleAdminWizard(ctx) {
         return;
     }
 
+    // --- Product Add Flow ---
     if (state.type === 'PRODUCT') {
         if (state.step === 'PHOTO') {
             if (!ctx.message.photo) return ctx.reply("❌ Photo required!");
@@ -391,7 +404,7 @@ async function handleAdminWizard(ctx) {
         } else if (state.step === 'DESC') {
             state.data.description = text;
             state.step = 'INFO';
-            ctx.reply("💰 Step 4/5: Format: Price|Version|Tech");
+            ctx.reply("💰 Step 4/5: Format: Price|Version|Tech (e.g: 500|v1.0|Node.js)");
         } else if (state.step === 'INFO') {
             const p = text.split('|');
             if (p.length < 3) return ctx.reply("❌ Invalid format. Try again.");
@@ -417,11 +430,10 @@ async function handleAdminWizard(ctx) {
 app.post('/api/reward', async (req, res) => {
     const { uid } = req.body;
     if (!uid) return res.status(400).json({ error: 'No UID' });
-    
+
     await updateUserBalance(uid, 10);
     const user = await getUser(uid);
-    
-    // Optional: Send silent notification or just update balance
+
     res.json({ success: true, newBalance: user ? user.balance : 0 });
 });
 
