@@ -1,17 +1,20 @@
 require('dotenv').config();
 const express = require('express');
 const { Telegraf, Markup } = require('telegraf');
-const db = require('./firebase');
+const { 
+    dbRef, ref, set, get, child, remove, push, 
+    query, orderByChild, equalTo, serverTimestamp 
+} = require('./firebase');
 
 // ⚙️ Configuration
 const PORT = process.env.PORT || 3000;
-const ADMIN_ID = parseInt(process.env.ADMIN_ID); // Render Environment থেকে নিবে
-const DOMAIN = process.env.RENDER_EXTERNAL_URL; // Render অটো দিবে
-const BOT_TOKEN = process.env.BOT_TOKEN; // Render Environment থেকে নিবে
+const ADMIN_ID = parseInt(process.env.ADMIN_ID) || 0;
+const DOMAIN = process.env.RENDER_EXTERNAL_URL;
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const REFERRAL_BONUS = 50;
 
-if (!BOT_TOKEN || !ADMIN_ID) {
-    console.error("Error: BOT_TOKEN or ADMIN_ID is missing in .env");
+if (!BOT_TOKEN) {
+    console.error("Error: BOT_TOKEN is missing.");
     process.exit(1);
 }
 
@@ -21,14 +24,14 @@ const bot = new Telegraf(BOT_TOKEN);
 app.use(express.json());
 app.use(express.static('public'));
 
-// 🧠 Admin State for Wizards
+// 🧠 Admin State Management
 const adminState = {};
 
 // ============================================================
-// 🛠 Helper Functions
+// 🛠 Helper Functions (Database Interactions)
 // ============================================================
 
-// Fancy Text Converter (Small Caps)
+// Fancy Text Generator
 const fancyText = (text) => {
     const map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ', 'g': 'ɢ', 'h': 'ʜ',
@@ -39,44 +42,77 @@ const fancyText = (text) => {
     return text.toLowerCase().split('').map(c => map[c] || c).join('');
 };
 
+// Get User Data
 async function getUser(uid) {
     try {
-        const snap = await db.ref(`users/${uid}`).once('value');
-        return snap.val();
-    } catch (e) { console.error("DB Error getUser:", e); return null; }
+        const userRef = child(dbRef, `users/${uid}`);
+        const snap = await get(userRef);
+        return snap.exists() ? snap.val() : null;
+    } catch (e) {
+        console.error("DB Error (getUser):", e);
+        return null;
+    }
 }
 
+// Update User Balance
 async function updateUserBalance(uid, amount) {
     try {
-        await db.ref(`users/${uid}/balance`).transaction((current) => (current || 0) + amount);
-    } catch (e) { console.error("DB Error updateBalance:", e); }
+        const balanceRef = child(dbRef, `users/${uid}/balance`);
+        const currentSnap = await get(balanceRef);
+        const currentBalance = currentSnap.exists() ? currentSnap.val() : 0;
+        await set(balanceRef, currentBalance + amount);
+    } catch (e) {
+        console.error("DB Error (updateBalance):", e);
+    }
 }
 
+// Get All Active Products
 async function getActiveProducts() {
     try {
-        const snap = await db.ref('products').orderByChild('active').equalTo(true).once('value');
+        const productsRef = child(dbRef, 'products');
+        // Note: Simple query for v9 compat
+        const snap = await get(productsRef);
+        if (!snap.exists()) return [];
+        
         const data = snap.val();
-        if (!data) return [];
-        return Object.keys(data).map(key => ({ id: key, ...data[key] })).reverse();
-    } catch (e) { console.error("DB Error getProducts:", e); return []; }
+        // Filter and Map
+        return Object.keys(data).map(key => ({
+            id: key,
+            ...data[key]
+        })).filter(p => p.active).reverse(); // Newest first
+    } catch (e) {
+        console.error("DB Error (getProducts):", e);
+        return [];
+    }
 }
 
 // ============================================================
-// 🤖 Middleware & Registration
+// 🤖 Middleware & User Registration
 // ============================================================
 
 bot.use(async (ctx, next) => {
     if (ctx.from) {
         const uid = ctx.from.id;
-        const snap = await db.ref(`users/${uid}`).once('value');
+        const userRef = child(dbRef, `users/${uid}`);
+        const snap = await get(userRef);
 
         if (!snap.exists()) {
             let referrerId = null;
+            
             // Referral Logic
             if (ctx.startPayload && ctx.startPayload != uid && !isNaN(ctx.startPayload)) {
                 referrerId = parseInt(ctx.startPayload);
+                
+                // Credit Referrer
                 await updateUserBalance(referrerId, REFERRAL_BONUS);
-                await db.ref(`users/${referrerId}/referrals`).transaction(c => (c || 0) + 1);
+                
+                // Increment Referral Count
+                const refCountRef = child(dbRef, `users/${referrerId}/referrals`);
+                const refCountSnap = await get(refCountRef);
+                const newCount = (refCountSnap.exists() ? refCountSnap.val() : 0) + 1;
+                await set(refCountRef, newCount);
+
+                // Notify Referrer
                 try {
                     await bot.telegram.sendMessage(referrerId, 
                         `🎉 <b>Nᴇᴡ Rᴇꜰᴇʀʀᴀʟ Jᴏɪɴᴇᴅ!</b>\n💰 Yᴏᴜ Iɴꜱᴛᴀɴᴛʟʏ Rᴇᴄᴇɪᴠᴇᴅ <b>+${REFERRAL_BONUS} Cᴏɪɴꜱ</b>!`, 
@@ -85,12 +121,14 @@ bot.use(async (ctx, next) => {
                 } catch (e) {}
             }
 
-            await db.ref(`users/${uid}`).set({
+            // Create New User
+            await set(userRef, {
                 firstName: ctx.from.first_name,
                 username: ctx.from.username || 'none',
                 balance: 0,
                 joinedAt: Date.now(),
-                referredBy: referrerId
+                referredBy: referrerId,
+                referrals: 0
             });
         }
     }
@@ -136,31 +174,38 @@ async function sendHome(ctx) {
 // 🛍 SHOP SYSTEM (Catalog -> Detail)
 // ============================================================
 
-// Show Catalog List
+// 1. Show Catalog List
 bot.action('menu_shop', async (ctx) => {
     const products = await getActiveProducts();
+    
     if (products.length === 0) {
         await ctx.answerCbQuery("🚫 Store is empty!", { show_alert: true });
-        return ctx.replyWithHTML("<b>🚫 No products available yet.</b>", getMainMenu(ctx.from.id === ADMIN_ID));
+        return ctx.replyWithHTML("<b>🚫 No products available right now.</b>", getMainMenu(ctx.from.id === ADMIN_ID));
     }
 
-    // Create buttons with Titles only
-    const buttons = products.map(p => [Markup.button.callback(`📦 ${p.title}`, `view_prod_${p.id}`)]);
+    const buttons = products.map(p => [
+        Markup.button.callback(`📦 ${p.title}`, `view_prod_${p.id}`)
+    ]);
     buttons.push([Markup.button.callback('🔙 Back', 'home_cmd')]);
 
     try { await ctx.deleteMessage(); } catch(e){}
+    
     await ctx.replyWithHTML(
-        `<b>🛒 Sᴏᴜʀᴄᴇ Cᴏᴅᴇ Cᴀᴛᴀʟᴏɢ</b>\n\nSelect an item to view details:`,
+        `<b>🛒 Sᴏᴜʀᴄᴇ Cᴏᴅᴇ Cᴀᴛᴀʟᴏɢ</b>\n\n` +
+        `Sᴇʟᴇᴄᴛ ᴀɴ ɪᴛᴇᴍ ᴛᴏ ᴠɪᴇᴡ ᴅᴇᴛᴀɪʟꜱ:`,
         Markup.inlineKeyboard(buttons)
     );
 });
 
-// Show Product Detail
+// 2. Show Single Product Detail
 bot.action(/view_prod_(.+)/, async (ctx) => {
     const prodId = ctx.match[1];
-    const pSnap = await db.ref(`products/${prodId}`).once('value');
-    if (!pSnap.exists()) return ctx.answerCbQuery("Error: Not found!");
-    const p = pSnap.val();
+    const pRef = child(dbRef, `products/${prodId}`);
+    const snap = await get(pRef);
+
+    if (!snap.exists()) return ctx.answerCbQuery("Error: Product not found!");
+    
+    const p = snap.val();
 
     const caption = `<b>📦 ${p.title}</b>\n\n` +
                     `📝 ${p.description}\n\n` +
@@ -175,31 +220,40 @@ bot.action(/view_prod_(.+)/, async (ctx) => {
     ]);
 
     try {
-        // If previous message is a photo, edit media. If text, delete and send new.
         if (ctx.callbackQuery.message.photo) {
-            await ctx.editMessageMedia({ type: 'photo', media: p.imageId, caption: caption, parse_mode: 'HTML' }, buttons);
+            await ctx.editMessageMedia({ 
+                type: 'photo', 
+                media: p.imageId, 
+                caption: caption, 
+                parse_mode: 'HTML' 
+            }, buttons);
         } else {
             await ctx.deleteMessage();
             await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...buttons });
         }
     } catch (e) {
-        // Fallback if edit fails
         try { await ctx.deleteMessage(); } catch(err){}
         await ctx.replyWithPhoto(p.imageId, { caption: caption, parse_mode: 'HTML', ...buttons });
     }
 });
 
-// Buy Logic
+// 3. Buy Logic
 bot.action(/buy_(.+)/, async (ctx) => {
     const prodId = ctx.match[1];
     const uid = ctx.from.id;
     const user = await getUser(uid);
-    const pSnap = await db.ref(`products/${prodId}`).once('value');
+    
+    const pRef = child(dbRef, `products/${prodId}`);
+    const pSnap = await get(pRef);
+    if (!pSnap.exists()) return ctx.answerCbQuery("Error!");
     const p = pSnap.val();
 
     // Check if already purchased
-    const owned = await db.ref(`purchases/${uid}/${prodId}`).once('value');
-    if (owned.exists()) return ctx.answerCbQuery("✅ Already Purchased!", { show_alert: true });
+    const purchaseRef = child(dbRef, `purchases/${uid}/${prodId}`);
+    const purchaseSnap = await get(purchaseRef);
+    if (purchaseSnap.exists()) {
+        return ctx.answerCbQuery("✅ Already Purchased!", { show_alert: true });
+    }
 
     // Check Balance
     if (!user || user.balance < p.price) {
@@ -207,6 +261,7 @@ bot.action(/buy_(.+)/, async (ctx) => {
         const adUrl = `${DOMAIN}/ads.html?uid=${uid}`;
         
         try { await ctx.deleteMessage(); } catch(e){}
+        
         return ctx.replyWithHTML(
             `⚠️ <b>Iɴꜱᴜꜰꜰɪᴄɪᴇɴᴛ Bᴀʟᴀɴᴄᴇ!</b>\n\n` +
             `Yᴏᴜ ɴᴇᴇᴅ <b>${short} ᴄᴏɪɴꜱ</b> ᴍᴏʀᴇ.\n` +
@@ -218,9 +273,9 @@ bot.action(/buy_(.+)/, async (ctx) => {
         );
     }
 
-    // Success Transaction
+    // Success: Deduct Balance & Save Purchase
     await updateUserBalance(uid, -p.price);
-    await db.ref(`purchases/${uid}/${prodId}`).set({ purchasedAt: Date.now(), price: p.price });
+    await set(purchaseRef, { purchasedAt: Date.now(), price: p.price });
 
     await ctx.editMessageCaption(
         `🎉 <b>Pᴜʀᴄʜᴀꜱᴇ Sᴜᴄᴄᴇꜱꜱꜰᴜʟ!</b>\n\n` +
@@ -269,14 +324,21 @@ bot.action('menu_wallet', async (ctx) => {
 });
 
 bot.action('menu_library', async (ctx) => {
-    const snap = await db.ref(`purchases/${ctx.from.id}`).once('value');
-    const data = snap.val();
-    if (!data) return ctx.answerCbQuery("🚫 Library is empty!", { show_alert: true });
+    const uid = ctx.from.id;
+    const libRef = child(dbRef, `purchases/${uid}`);
+    const snap = await get(libRef);
+    
+    if (!snap.exists()) return ctx.answerCbQuery("🚫 Library is empty!", { show_alert: true });
 
+    const data = snap.val();
     let buttons = [];
+    
     for (const pid of Object.keys(data)) {
-        const pSnap = await db.ref(`products/${pid}`).once('value');
-        if (pSnap.val()) buttons.push([Markup.button.callback(`📥 ${pSnap.val().title}`, `dl_${pid}`)]);
+        const pRef = child(dbRef, `products/${pid}`);
+        const pSnap = await get(pRef);
+        if (pSnap.exists()) {
+            buttons.push([Markup.button.callback(`📥 ${pSnap.val().title}`, `dl_${pid}`)]);
+        }
     }
     buttons.push([Markup.button.callback('🔙 Back', 'home_cmd')]);
 
@@ -285,8 +347,13 @@ bot.action('menu_library', async (ctx) => {
 });
 
 bot.action(/dl_(.+)/, async (ctx) => {
-    const p = (await db.ref(`products/${ctx.match[1]}`).once('value')).val();
-    if (p) ctx.replyWithHTML(`🔗 <b>${p.title}</b>\n\nDownload Link: ${p.link}`);
+    const pid = ctx.match[1];
+    const pRef = child(dbRef, `products/${pid}`);
+    const snap = await get(pRef);
+    if (snap.exists()) {
+        const p = snap.val();
+        ctx.replyWithHTML(`🔗 <b>${p.title}</b>\n\nDownload Link: ${p.link}`);
+    }
 });
 
 bot.action('menu_support', async (ctx) => {
@@ -303,7 +370,7 @@ bot.action('menu_support', async (ctx) => {
 bot.action('home_cmd', (ctx) => sendHome(ctx));
 
 // ============================================================
-// 👑 Admin Panel
+// 👑 Admin Panel & Wizards
 // ============================================================
 
 bot.action('admin_panel', async (ctx) => {
@@ -317,7 +384,7 @@ bot.action('admin_panel', async (ctx) => {
     ]));
 });
 
-// Delete List
+// Delete List Logic
 bot.action('admin_delete_list', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const products = await getActiveProducts();
@@ -330,19 +397,20 @@ bot.action('admin_delete_list', async (ctx) => {
 
 bot.action(/del_(.+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    await db.ref(`products/${ctx.match[1]}`).remove();
+    const prodId = ctx.match[1];
+    const pRef = child(dbRef, `products/${prodId}`);
+    await remove(pRef);
     ctx.answerCbQuery("✅ Deleted!");
     ctx.triggerAction('admin_delete_list');
 });
 
-// Add Product Wizard Start
+// Wizards Start
 bot.action('admin_add_start', (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     adminState[ADMIN_ID] = { type: 'PRODUCT', step: 'PHOTO', data: {} };
     ctx.reply("📸 Step 1/5: Send Cover Photo.");
 });
 
-// Broadcast Wizard Start
 bot.action('admin_cast_start', (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     adminState[ADMIN_ID] = { type: 'BROADCAST', step: 'PHOTO', data: {} };
@@ -367,19 +435,24 @@ async function handleAdminWizard(ctx) {
             state.step = 'BTN';
             ctx.reply("🔘 Step 3/3: Button (Name|URL) or 'skip'):");
         } else if (state.step === 'BTN') {
-            const users = (await db.ref('users').once('value')).val() || {};
+            const usersSnap = await get(child(dbRef, 'users'));
+            const users = usersSnap.exists() ? usersSnap.val() : {};
             let count = 0;
             let extra = { parse_mode: 'HTML' };
+            
             if (text.includes('|')) {
-                const [name, url] = text.split('|');
-                extra.reply_markup = { inline_keyboard: [[{ text: name, url: url }]] };
+                const parts = text.split('|');
+                extra.reply_markup = { inline_keyboard: [[{ text: parts[0], url: parts[1] }]] };
             }
             
             ctx.reply("⏳ Broadcasting...");
             for (const uid of Object.keys(users)) {
                 try {
-                    if (state.data.photo) await bot.telegram.sendPhoto(uid, state.data.photo, { caption: state.data.text, ...extra });
-                    else await bot.telegram.sendMessage(uid, state.data.text, extra);
+                    if (state.data.photo) {
+                        await bot.telegram.sendPhoto(uid, state.data.photo, { caption: state.data.text, ...extra });
+                    } else {
+                        await bot.telegram.sendMessage(uid, state.data.text, extra);
+                    }
                     count++;
                     if (count % 20 === 0) await new Promise(r => setTimeout(r, 1000)); // Rate limit
                 } catch (e) {}
@@ -404,7 +477,7 @@ async function handleAdminWizard(ctx) {
         } else if (state.step === 'DESC') {
             state.data.description = text;
             state.step = 'INFO';
-            ctx.reply("💰 Step 4/5: Format: Price|Version|Tech (e.g: 500|v1.0|Node.js)");
+            ctx.reply("💰 Step 4/5: Format: Price|Version|Tech");
         } else if (state.step === 'INFO') {
             const p = text.split('|');
             if (p.length < 3) return ctx.reply("❌ Invalid format. Try again.");
@@ -416,7 +489,11 @@ async function handleAdminWizard(ctx) {
         } else if (state.step === 'LINK') {
             state.data.link = text;
             state.data.active = true;
-            await db.ref('products').push(state.data);
+            
+            // Push to Firebase
+            const newProductRef = push(child(dbRef, 'products'));
+            await set(newProductRef, state.data);
+            
             delete adminState[ADMIN_ID];
             ctx.reply("✅ Product Added Successfully!");
         }
